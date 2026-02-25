@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 type ItemStatus = "queued" | "processing" | "done" | "error";
 type OCRProvider = "google" | "openai";
-type DescriptionProvider = "openai" | "none";
+type DescriptionProvider = "google" | "openai" | "none";
 
 type ResultItem = {
   id: string;
@@ -72,7 +72,7 @@ export default function HomePage() {
   const [copyMessage, setCopyMessage] = useState("");
   const [ocrProvider, setOcrProvider] = useState<OCRProvider>("google");
   const [descriptionProvider, setDescriptionProvider] =
-    useState<DescriptionProvider>("openai");
+    useState<DescriptionProvider>("google");
 
   const stats = useMemo(() => {
     const total = items.length;
@@ -244,6 +244,7 @@ export default function HomePage() {
                 )
               }
             >
+              <option value="google">Google Vision (без OpenAI)</option>
               <option value="openai">OpenAI</option>
               <option value="none">Не извлекать</option>
             </select>
@@ -254,7 +255,11 @@ export default function HomePage() {
           Режим: OCR{" "}
           {ocrProvider === "google" ? "Google Vision" : "OpenAI Vision"} |{" "}
           Описание{" "}
-          {descriptionProvider === "openai" ? "OpenAI" : "выключено"}
+          {descriptionProvider === "google"
+            ? "Google Vision"
+            : descriptionProvider === "openai"
+              ? "OpenAI"
+              : "выключено"}
           {" | "}
           Всего: {stats.total} | Готово: {stats.done} | В работе:{" "}
           {stats.processing} | Ошибки: {stats.errors}

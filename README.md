@@ -20,6 +20,7 @@
 2. Скопируйте `.env.example` в `.env` и укажите ключ:
    ```bash
    GOOGLE_VISION_API_KEY=...
+   # опционально:
    OPENAI_API_KEY=...
    OPENAI_MODEL=gpt-4.1-mini
    ```
@@ -33,13 +34,14 @@
 1. Импортируйте репозиторий в Vercel.
 2. Добавьте Environment Variables:
    - `GOOGLE_VISION_API_KEY`
-   - `OPENAI_API_KEY`
+   - `OPENAI_API_KEY` (опционально)
    - `OPENAI_MODEL` (опционально)
 3. Нажмите Deploy.
 
 ## Режимы провайдеров
-- По умолчанию: `OCR = Google Vision`, `Описание = OpenAI`.
+- По умолчанию: `OCR = Google Vision`, `Описание = Google Vision`.
 - Можно переключить `OCR = OpenAI`.
+- Можно переключить описание на `OpenAI`.
 - Можно отключить описание (`Описание = Не извлекать`).
 
 ## Как это работает

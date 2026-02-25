@@ -8,7 +8,7 @@ const openAiModel = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
 const googleVisionEndpoint = "https://vision.googleapis.com/v1/images:annotate";
 
 type OCRProvider = "google" | "openai";
-type DescriptionProvider = "openai" | "none";
+type DescriptionProvider = "google" | "openai" | "none";
 
 function parseJson(content: string | null | undefined) {
   if (!content) {
@@ -46,7 +46,92 @@ function normalizeOCRProvider(value: FormDataEntryValue | null): OCRProvider {
 function normalizeDescriptionProvider(
   value: FormDataEntryValue | null
 ): DescriptionProvider {
-  return value === "none" ? "none" : "openai";
+  if (value === "openai" || value === "none") {
+    return value;
+  }
+  return "google";
+}
+
+type GoogleVisionResponse = {
+  responses?: Array<{
+    error?: { message?: string };
+    fullTextAnnotation?: { text?: string };
+    textAnnotations?: Array<{ description?: string }>;
+    labelAnnotations?: Array<{ description?: string; score?: number }>;
+    localizedObjectAnnotations?: Array<{ name?: string; score?: number }>;
+  }>;
+};
+
+function uniqueTopTerms(values: Array<{ term: string; score: number }>) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const item of values) {
+    const normalized = item.term.trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(item.term.trim());
+  }
+
+  return result;
+}
+
+function buildGoogleDescription(params: {
+  labels?: Array<{ description?: string; score?: number }>;
+  objects?: Array<{ name?: string; score?: number }>;
+  text: string;
+}) {
+  const labels = uniqueTopTerms(
+    (params.labels ?? [])
+      .filter(
+        (item): item is { description: string; score?: number } =>
+          typeof item.description === "string" &&
+          item.description.trim().length > 0
+      )
+      .map((item) => ({
+        term: item.description,
+        score: item.score ?? 0
+      }))
+      .filter((item) => item.score >= 0.55)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6)
+  );
+
+  const objects = uniqueTopTerms(
+    (params.objects ?? [])
+      .filter(
+        (item): item is { name: string; score?: number } =>
+          typeof item.name === "string" && item.name.trim().length > 0
+      )
+      .map((item) => ({
+        term: item.name,
+        score: item.score ?? 0
+      }))
+      .filter((item) => item.score >= 0.5)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5)
+  );
+
+  if (labels.length === 0 && objects.length === 0) {
+    return params.text
+      ? "Скриншот с текстовым содержимым."
+      : "";
+  }
+
+  const parts: string[] = [];
+  if (labels.length > 0) {
+    parts.push(`Похоже на: ${labels.join(", ")}.`);
+  }
+  if (objects.length > 0) {
+    parts.push(`Объекты: ${objects.join(", ")}.`);
+  }
+  if (params.text) {
+    parts.push("На изображении также есть текст.");
+  }
+
+  return parts.join(" ");
 }
 
 async function extractWithOpenAI(params: {
@@ -148,7 +233,7 @@ async function describeWithOpenAI(params: { base64: string; mimeType: string }) 
     : "";
 }
 
-async function extractTextWithGoogle(params: { base64: string }) {
+async function extractWithGoogleVision(params: { base64: string }) {
   if (!process.env.GOOGLE_VISION_API_KEY) {
     throw new Error(
       "GOOGLE_VISION_API_KEY не задан. Добавьте его в переменные окружения."
@@ -164,7 +249,11 @@ async function extractTextWithGoogle(params: { base64: string }) {
         requests: [
           {
             image: { content: params.base64 },
-            features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
+            features: [
+              { type: "DOCUMENT_TEXT_DETECTION" },
+              { type: "LABEL_DETECTION", maxResults: 8 },
+              { type: "OBJECT_LOCALIZATION", maxResults: 8 }
+            ],
             imageContext: {
               languageHints: ["ru", "en"]
             }
@@ -174,13 +263,7 @@ async function extractTextWithGoogle(params: { base64: string }) {
     }
   );
 
-  const payload = (await response.json()) as {
-    responses?: Array<{
-      error?: { message?: string };
-      fullTextAnnotation?: { text?: string };
-      textAnnotations?: Array<{ description?: string }>;
-    }>;
-  };
+  const payload = (await response.json()) as GoogleVisionResponse;
 
   if (!response.ok) {
     throw new Error(
@@ -198,7 +281,14 @@ async function extractTextWithGoogle(params: { base64: string }) {
     result?.textAnnotations?.[0]?.description ??
     "";
 
-  return typeof text === "string" ? text.trim() : "";
+  const normalizedText = typeof text === "string" ? text.trim() : "";
+  const description = buildGoogleDescription({
+    labels: result?.labelAnnotations,
+    objects: result?.localizedObjectAnnotations,
+    text: normalizedText
+  });
+
+  return { text: normalizedText, description };
 }
 
 export async function POST(req: Request) {
@@ -236,11 +326,18 @@ export async function POST(req: Request) {
         mimeType: file.type
       });
       text = openAiResult.text;
-      description =
-        descriptionProvider === "openai" ? openAiResult.description : "";
-    } else {
-      text = await extractTextWithGoogle({ base64 });
       if (descriptionProvider === "openai") {
+        description = openAiResult.description;
+      } else if (descriptionProvider === "google") {
+        const googleResult = await extractWithGoogleVision({ base64 });
+        description = googleResult.description;
+      }
+    } else {
+      const googleResult = await extractWithGoogleVision({ base64 });
+      text = googleResult.text;
+      if (descriptionProvider === "google") {
+        description = googleResult.description;
+      } else if (descriptionProvider === "openai") {
         description = await describeWithOpenAI({
           base64,
           mimeType: file.type
